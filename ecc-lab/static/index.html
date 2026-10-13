@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ECC Lab</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--card:#f4f4f6;--ac:#0b57d0;--bd:#d8d8de}
+@media(prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--card:#222;--ac:#8ab4f8;--bd:#3a3a3a}}
+body{font:15px system-ui,sans-serif;background:var(--bg);color:var(--fg);max-width:980px;margin:0 auto;padding:16px}
+h1{margin:0 0 4px}h2{font-size:16px;margin:0 0 8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px}
+input,textarea,select{width:100%;box-sizing:border-box;margin:3px 0 6px;padding:6px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--fg);font:13px ui-monospace,monospace}
+button{background:var(--ac);color:var(--bg);border:0;border-radius:6px;padding:6px 10px;margin:2px 4px 2px 0;cursor:pointer}
+pre{background:var(--bg);border:1px solid var(--bd);border-radius:6px;padding:8px;white-space:pre-wrap;word-break:break-all;font-size:12px;min-height:20px;margin:6px 0 0}
+label{font-size:12px;opacity:.8}canvas{width:100%;max-width:340px;border:1px solid var(--bd);border-radius:6px}
+</style></head><body>
+<h1>ECC Lab</h1>
+<p style="margin:0;opacity:.8">Educational elliptic-curve playground. Points are "x,y" (or "inf"). Big numbers accept 0x hex.</p>
+<div class="grid">
+ <div class="card"><h2>Curve</h2><select id="curve"></select><pre id="params"></pre>
+  <canvas id="plot" width="340" height="340"></canvas></div>
+ <div class="card"><h2>Key pair</h2>
+  <button id="btnKey">Generate</button>
+  <label>Private key d</label><input id="priv"><label>Public key Q = dG</label><input id="pub"></div>
+ <div class="card"><h2>Point arithmetic</h2>
+  <label>P</label><input id="P"><label>Q</label><input id="Q" placeholder="x,y">
+  <label>k (scalar)</label><input id="k" value="3">
+  <button id="btnAdd">P + Q</button><button id="btnMul">k · P</button><button id="btnOn">P on curve?</button>
+  <pre id="out1"></pre></div>
+ <div class="card"><h2>ECDH key exchange</h2>
+  <button id="btnEcdh">Run Alice ↔ Bob demo</button><pre id="out2"></pre></div>
+ <div class="card"><h2>ECDSA</h2>
+  <label>Message</label><textarea id="msg" rows="2">hello ecc</textarea>
+  <button id="btnSign">Sign (uses d)</button><button id="btnVer">Verify (uses Q)</button>
+  <label>Signature r,s</label><input id="sig"><pre id="out3"></pre></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const curve=()=>$("curve").value;
+const pp=s=>{s=s.trim();if(!s||s==="inf")return{inf:true};const[x,y]=s.split(",").map(t=>t.trim());return{x,y}};
+const fp=o=>o.inf?"inf":`${o.x},${o.y}`;
+async function api(path,body){
+  const r=await fetch(path,body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:undefined);
+  const j=await r.json();if(!r.ok)throw new Error(j.error||r.statusText);return j}
+function run(id,fn){return async()=>{try{$(id).textContent=await fn()}catch(e){$(id).textContent="Error: "+e.message}}}
+let info={},pts=[];
+function draw(hi){
+  const cv=$("plot"),g=cv.getContext("2d"),W=cv.width,c=info[curve()];
+  g.clearRect(0,0,W,W);g.fillStyle=getComputedStyle(document.body).color;
+  if(!c||!c.small){g.fillText("Plot available for the toy curve only",20,W/2);return}
+  const p=+c.p,s=W/p;
+  pts.forEach(q=>{g.globalAlpha=.6;g.fillRect(q.x*s+s*.3,W-(q.y+1)*s+s*.3,s*.4,s*.4)});
+  g.globalAlpha=1;g.fillStyle="#e53935";
+  hi.filter(o=>o&&!o.inf).forEach(o=>{g.beginPath();g.arc(+o.x*s+s/2,W-(+o.y)*s-s/2,s*.35,0,7);g.fill()})}
+async function onCurve(){
+  const c=info[curve()];
+  $("params").textContent=`y² = x³ + ${c.a}x + ${c.b}  (mod p)\np = ${c.p}\nG = (${c.G.x}, ${c.G.y})\nn = ${c.n}`;
+  $("P").value=fp(c.G);$("Q").value="";$("priv").value=$("pub").value=$("sig").value="";
+  pts=c.small?await api("/api/points?curve="+c.name):[];draw([])}
+async function init(){
+  const list=await api("/api/curves");info=Object.fromEntries(list.map(c=>[c.name,c]));
+  $("curve").innerHTML=list.map(c=>`<option>${c.name}</option>`).join("");
+  $("curve").onchange=onCurve;await onCurve()}
+$("btnKey").onclick=run("out1",async()=>{const r=await api("/api/keygen",{curve:curve()});
+  $("priv").value=r.priv;$("pub").value=fp(r.pub);draw([r.pub]);return "Key pair generated."});
+$("btnAdd").onclick=run("out1",async()=>{const P=pp($("P").value),Q=pp($("Q").value);
+  const r=await api("/api/add",{curve:curve(),P,Q});draw([P,Q,r.result]);return "P + Q = "+fp(r.result)});
+$("btnMul").onclick=run("out1",async()=>{const P=pp($("P").value);
+  const r=await api("/api/mul",{curve:curve(),k:$("k").value,P});draw([P,r.result]);return `${$("k").value}·P = `+fp(r.result)});
+$("btnOn").onclick=run("out1",async()=>{const r=await api("/api/oncurve",{curve:curve(),P:pp($("P").value)});
+  return r.on_curve?"Yes, P is on the curve.":"No, P is NOT on the curve."});
+$("btnEcdh").onclick=run("out2",async()=>{const c=curve(),a=await api("/api/keygen",{curve:c}),b=await api("/api/keygen",{curve:c});
+  const s1=await api("/api/ecdh",{curve:c,priv:a.priv,pub:b.pub}),s2=await api("/api/ecdh",{curve:c,priv:b.priv,pub:a.pub});
+  return `Alice d: ${a.priv}\nAlice Q: ${fp(a.pub)}\nBob d: ${b.priv}\nBob Q: ${fp(b.pub)}\n\nAlice computes: ${s1.shared_x}\nBob computes:   ${s2.shared_x}\nMatch: ${s1.shared_x===s2.shared_x}`});
+$("btnSign").onclick=run("out3",async()=>{const r=await api("/api/sign",{curve:curve(),priv:$("priv").value,msg:$("msg").value});
+  $("sig").value=`${r.r},${r.s}`;return `r = ${r.r}\ns = ${r.s}`});
+$("btnVer").onclick=run("out3",async()=>{const[r,s]=$("sig").value.split(",").map(t=>t.trim());
+  const v=await api("/api/verify",{curve:curve(),pub:pp($("pub").value),msg:$("msg").value,sig:{r,s}});
+  return v.valid?"VALID signature":"INVALID signature"});
+init();
+</script></body></html>
